@@ -49,6 +49,24 @@ python ingest.py --noisy-only  # build only the HR + noise collection
 
 `--force` replaces existing collection contents. Use it after changing the embedding model or when you need to refresh the corpus. Normal ingestion skips populated collections.
 
+### Startup and Ingestion Flow
+
+Run `python ingest.py` before starting the app for the first time:
+
+```mermaid
+flowchart TD
+	A["Set up Python and .env"] --> B["python ingest.py"]
+	B --> C["ingest.py: main()"]
+	C --> D["ingestion.run_ingestion()"]
+	D --> E["Read local data/ files"]
+	E --> F["Parse supported noise documents"]
+	F --> G["Split into chunks"]
+	G --> H["OpenAI dense embeddings + FastEmbed BM25"]
+	H --> I["Write both Qdrant collections"]
+	I --> J["hr_policies"]
+	I --> K["hr_policies_noisy_demo"]
+```
+
 ## 3. Start the Application
 
 ```powershell
@@ -60,6 +78,40 @@ Open the local URL printed by Streamlit, normally `http://localhost:8501`. If th
 ```powershell
 streamlit run app.py --server.port 8502
 ```
+
+At startup, `app.py:get_agent()` calls `pipeline.build_hr_assistant()`. It
+connects to `hr_policies`; if that collection is missing, it runs HR
+ingestion once automatically.
+
+### Chat Request Flow
+
+```mermaid
+flowchart TD
+	A["Question in Streamlit"] --> B["pipeline.ask()"]
+	B --> C["Screen question + recent user turns"]
+	C --> D{"Input safety passes?"}
+	D -- No --> E["Return blocked message"]
+	D -- Yes --> F["SemanticCache.lookup()"]
+	F --> G{"Cache hit?"}
+	G -- Yes --> H["Record turn and return cached answer"]
+	G -- No --> I["thread_memory.invoke_agent()"]
+	I --> J["LangGraph agent calls LLM gateway"]
+	J --> K{"Search tool needed?"}
+	K -- No --> P["Check generated answer"]
+	K -- Yes --> L["Guarded search tool"]
+	L --> M["HR category filter + Qdrant retrieval"]
+	M --> N["OpenAI embedding rerank + relevance check"]
+	N --> O["Return source chunks; agent resumes"]
+	O --> J
+	J -. "Groq fails after retries" .-> R["OpenAI fallback"]
+	R --> K
+	P --> Q{"Output safety passes?"}
+	Q -- No --> S["Return blocked-answer notice"]
+	Q -- Yes --> T["SemanticCache.store() and show answer"]
+```
+
+The agent may call the search tool more than once. A cache hit skips the
+agent and output-screening steps.
 
 The app can also be run from the CLI:
 
@@ -77,7 +129,20 @@ Ensure both Qdrant collections are ingested, then run:
 python evaluate.py
 ```
 
-This evaluates the agent against `hr_assistant/evaluation_dataset.py` test cases for correctness and groundedness. It uses Groq's judge model and LangSmith to create or reuse the `hr-policy-qa` dataset and record an experiment. This sends evaluation data and model requests to those hosted services; it is not an offline test.
+### Evaluation Flow
+
+```mermaid
+flowchart TD
+	A["python evaluate.py"] --> B["evaluation.run_evaluation()"]
+	B --> C["Create or reuse LangSmith dataset"]
+	C --> D["Load hr_policies_noisy_demo from Qdrant"]
+	D --> E["Run guarded assistant for each test question"]
+	E --> F["Build retrieved context for grounding check"]
+	F --> G["Groq correctness + groundedness judges"]
+	G --> H["Save experiment and scores to LangSmith"]
+```
+
+This evaluates the agent against `hr_assistant/evaluation_dataset.py` test cases for correctness and groundedness. It uses Groq's judge model and LangSmith to create or reuse the `hr-policy-qa-gcpp` dataset and record an experiment. This sends evaluation data and model requests to those hosted services; it is not an offline test.
 
 ### Red-team checks
 

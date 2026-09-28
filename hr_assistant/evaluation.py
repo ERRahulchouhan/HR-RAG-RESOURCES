@@ -68,7 +68,7 @@ def run_evaluation():
     check_langsmith_tracing()
     client = Client()
     dataset = _ensure_dataset(client)
-
+    print("dataset", dataset)
     # Connect to the collection ingest.py already built. The agent uses the
     # same guarded search tool the app runs; the groundedness context is
     # rebuilt the SAME way that tool builds it — category filter, wide
